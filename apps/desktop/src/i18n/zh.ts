@@ -1,9 +1,12 @@
+import { mergeTranslations } from '@hermes/shared/i18n'
+
 import { defineFieldCopy } from '@/app/settings/field-copy'
 
-import { defineLocale } from './define-locale'
+import { defineLocale, type TranslationOverrides } from './define-locale'
 import { introZh } from './intro-zh'
+import { zhExtra } from './zh-extra'
 
-export const zh = defineLocale({
+const zhOverrides: TranslationOverrides = {
   externalOpenFailed: {
     title: '无法打开此链接',
     message: '没有注册用于打开此地址的浏览器。请复制链接并手动打开。',
@@ -5175,4 +5178,8 @@ export const zh = defineLocale({
       toggle: open => `${open ? '显示' : '隐藏'}侧边栏`
     }
   }
-})
+}
+
+// 本地补丁：官方词典缺口的中文补充（见 zh-extra.ts）。
+// 必须用 mergeTranslations 深合并：浅展开会把 boot / settings / sidebar 整棵子树替换掉。
+export const zh = defineLocale(mergeTranslations(zhOverrides, zhExtra))

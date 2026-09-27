@@ -1125,8 +1125,32 @@ export interface Translations {
       deleteEndpoint: string
       emptyDescription: string
       emptyTitle: string
+      name: string
       namePlaceholder: string
+      providerId: string
+      providerIdPlaceholder: string
+      endpointUrl: string
+      endpointUrlPlaceholder: string
+      apiMode: string
+      defaultModel: string
+      defaultModelPlaceholder: string
+      context: string
       contextPlaceholder: string
+      apiKey: string
+      apiKeyPlaceholderNew: string
+      apiKeyPlaceholderExisting: string
+      useForNewChats: string
+      discoverModels: string
+      test: string
+      newEndpoint: string
+      editEndpoint: string
+      addEndpoint: string
+      apiModeAuto: string
+      toastReachable: string
+      toastReachableTransport: (transport: string) => string
+      toastFoundModels: (count: number) => string
+      toastValidationFailed: string
+      toastValidationFailedTitle: string
     }
     computerUse: {
       accessibility: string
@@ -1536,6 +1560,13 @@ export interface Translations {
       moaAggregator: string
       moaAggregatorBilled: string
       moaReferenceHint: string
+      moaSetDefault: string
+      moaAddPreset: string
+      moaAddReference: string
+      moaDefaultLabel: string
+      auxStaleLead: (count: number, names: string) => string
+      auxStaleOtherProviders: string
+      auxStaleTail: string
       tasks: Record<string, AuxTaskCopy>
     }
     localModels: {
@@ -3147,6 +3178,27 @@ export interface Translations {
       done: string
     }
     markAllRead: string
+    filterMenu: {
+      aria: string
+      grouping: string
+      ordering: string
+      show: string
+      filters: string
+      status: string
+      pullRequest: string
+      profile: string
+      project: string
+      groups: Record<'date' | 'profile' | 'project' | 'status', string>
+      orderings: Record<'updated' | 'created' | 'status' | 'tokens' | 'cost' | 'manual', string>
+      rowMeta: Record<'updated' | 'preview' | 'tokens' | 'cost' | 'pr' | 'profile', string>
+      pr: Record<'open' | 'draft' | 'merged' | 'closed' | 'none', string>
+      statuses: Record<'needs-input' | 'working' | 'unread' | 'draft' | 'idle', string>
+      inboxStyle: string
+      archived: string
+      expandAll: string
+      collapseAll: string
+      resetToDefaults: string
+    }
   }
 
   composer: {

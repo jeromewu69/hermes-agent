@@ -183,6 +183,32 @@ def mcp_prefixed_tool_name(server_name: str, tool_name: str) -> str:
     return full_name[:_MCP_TOOL_NAME_MAX_LENGTH - len(suffix)] + suffix
 
 
+# Normalization is lossy, so two DISTINCT server tools can land on one registry name: ``read-file`` and
+# ``read_file`` differ only in a char ``sanitize_mcp_name_component`` rewrites, and every non-ASCII name
+# collapses to underscores (a Chinese-named server's tools all became ``mcp______MCP________________``).
+# Those entries are distinct capabilities, so the collision preflight gives each an extra suffix derived
+# from its ORIGINAL tool name: deterministic across restarts and across the live and schema-cache paths,
+# while a name that normalizes uniquely is never rewritten. Dispatch is unaffected either way — handlers
+# close over the original unprefixed tool name.
+_MCP_TOOL_NAME_DISAMBIGUATION_LENGTH = 6
+_disambiguated_names_warned: set[str] = set()
+
+
+def mcp_disambiguated_tool_name(registry_name: str, tool_name: str) -> str:
+    """*registry_name* + a stable ``_<6 hex chars of sha1(tool_name)>`` suffix, re-clamped to the
+    provider name limit. Only called for entries that would otherwise collide after normalization."""
+    suffix = "_" + hashlib.sha1(str(tool_name).encode("utf-8")).hexdigest()[:_MCP_TOOL_NAME_DISAMBIGUATION_LENGTH]
+    room = _MCP_TOOL_NAME_MAX_LENGTH - len(suffix)
+    if len(registry_name) <= room:
+        return registry_name + suffix
+    if registry_name not in _disambiguated_names_warned:  # recomputed on every health refresh
+        _disambiguated_names_warned.add(registry_name)
+        logger.warning("MCP tool name %r collides after normalization and %d chars leaves no room for a "
+                       "disambiguating suffix; truncating it to fit the %d-char provider limit",
+                       registry_name, len(registry_name), _MCP_TOOL_NAME_MAX_LENGTH)
+    return registry_name[:room] + suffix
+
+
 def _convert_mcp_schema(server_name: str, mcp_tool) -> dict:
     """Convert an MCP ``Tool`` (``.input_schema``, or ``.inputSchema`` before mcp 2.0) to a
     ``registry.register(schema=...)`` dict."""

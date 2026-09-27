@@ -320,6 +320,15 @@ mcp__my_api__list_items_v2
 
 Keep this in mind when writing `include` / `exclude` filters — use the **original** MCP tool name (with hyphens/dots), not the sanitized version.
 
+Sanitization is lossy, so two different tools can end up with the same name (for example `read-file` and `read_file`, or any two non-ASCII names, which all collapse to underscores). Both tools are still registered — the name that needed no rewriting keeps it, and each other colliding tool gets a stable `_<hash>` suffix derived from its original name:
+
+```text
+mcp__my_api__read_file
+mcp__my_api__read_file_9d3c2c
+```
+
+The suffix is deterministic across restarts, so the names are safe to reference from allowlists. When nothing collides, names have no suffix.
+
 ## OAuth 2.1 authentication
 
 For HTTP servers that require OAuth, set `auth: oauth` on the server entry:

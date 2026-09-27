@@ -97,13 +97,25 @@ def finish_text_response(
     # ``api_content`` sidecar, so the next turn still replays it byte-identically.
     _content = assistant_message.content
     _promoted = None
+    _degenerate = False
+    # A few characters of reasoning ("Now") is hung-gateway residue, not the
+    # vLLM whole-answer-filed-as-reasoning case this promotion exists for.
+    _DEGENERATE_REASONING_MAX = 16
     if (
         finish_reason == "stop"
         and not assistant_message.tool_calls
         and (_content is None or (isinstance(_content, str) and not _content.strip()))
     ):
         _promoted = agent._extract_reasoning(assistant_message) or None
-        if _promoted:
+        if _promoted and len(_promoted.strip()) <= _DEGENERATE_REASONING_MAX:
+            logger.warning(
+                "Degenerate reasoning-only stop (%d chars) — not promoting; empty ladder "
+                "will retry/fallback, then fail the turn (model=%s provider=%s)",
+                len(_promoted.strip()), agent.model, agent.provider,
+            )
+            _promoted = None
+            _degenerate = True
+        elif _promoted:
             # WARNING, not INFO: a model that keeps ending turns this way is stalled
             # (planning monologue, zero tool calls) while the turn reports "complete".
             logger.warning(
@@ -131,6 +143,17 @@ def finish_text_response(
         active_system_prompt = _ev.active_system_prompt
         _preflight_compression_blocked = _ev.preflight_compression_blocked
         api_call_count = _ev.api_call_count
+        if (
+            _degenerate
+            and _ev.action == "break"
+            and str(_turn_exit_reason) == "empty_response_exhausted"
+        ):
+            _turn_exit_reason = "degenerate_empty_response"
+            logger.warning(
+                "Degenerate empty stop exhausted retries/fallback — failing the turn "
+                "(model=%s provider=%s)",
+                agent.model, agent.provider,
+            )
         if _ev.action == "return":
             return _verdict("return", _ev.result)
         if _ev.action == "break":
