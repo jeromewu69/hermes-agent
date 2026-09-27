@@ -1361,8 +1361,32 @@ export const en: Translations = {
       deleteEndpoint: 'Delete endpoint',
       emptyDescription: 'Add an OpenAI-compatible endpoint below.',
       emptyTitle: 'No custom endpoints',
+      name: 'Name',
       namePlaceholder: 'Axet Proxy',
-      contextPlaceholder: 'Auto'
+      providerId: 'Provider ID',
+      providerIdPlaceholder: 'axet-proxy',
+      endpointUrl: 'Endpoint URL',
+      endpointUrlPlaceholder: 'http://127.0.0.1:8081/v1',
+      apiMode: 'API Mode',
+      defaultModel: 'Default Model',
+      defaultModelPlaceholder: 'gpt-5.4',
+      context: 'Context',
+      contextPlaceholder: 'Auto',
+      apiKey: 'API Key',
+      apiKeyPlaceholderNew: 'Optional',
+      apiKeyPlaceholderExisting: 'Leave blank to keep current key',
+      useForNewChats: 'Use for new chats',
+      discoverModels: 'Discover models',
+      test: 'Test',
+      newEndpoint: 'New endpoint',
+      editEndpoint: 'Edit Endpoint',
+      addEndpoint: 'Add Endpoint',
+      apiModeAuto: 'Auto-detect',
+      toastReachable: 'Endpoint is reachable.',
+      toastReachableTransport: (transport: string) => `Endpoint is reachable (${transport} route served).`,
+      toastFoundModels: (count: number) => `Found ${count} models.`,
+      toastValidationFailed: 'Endpoint validation failed.',
+      toastValidationFailedTitle: 'Validation failed'
     },
     computerUse: {
       accessibility: 'Accessibility',
@@ -1814,6 +1838,14 @@ export const en: Translations = {
       moaAggregator: 'Aggregator',
       moaAggregatorBilled: 'acting model · billed for the run',
       moaReferenceHint: 'advises once per turn by default',
+      moaSetDefault: 'Set default',
+      moaAddPreset: 'Add preset',
+      moaAddReference: 'Add reference model',
+      moaDefaultLabel: 'Default:',
+      auxStaleLead: (count: number, names: string) =>
+        `${count} auxiliary task${count === 1 ? '' : 's'} (${names}) still run on`,
+      auxStaleOtherProviders: 'other providers',
+      auxStaleTail: ', not your main model.',
       tasks: {
         vision: { label: 'Vision', hint: 'Image analysis' },
         compression: { label: 'Compression', hint: 'Context compaction' },
@@ -3730,7 +3762,59 @@ export const en: Translations = {
       working: 'Working',
       done: 'Done'
     },
-    markAllRead: 'Mark all as read'
+    markAllRead: 'Mark all as read',
+    filterMenu: {
+      aria: 'Filters',
+      grouping: 'Grouping',
+      ordering: 'Ordering',
+      show: 'Show',
+      filters: 'Filters',
+      status: 'Status',
+      pullRequest: 'Pull request',
+      profile: 'Profile',
+      project: 'Project',
+      groups: {
+        date: 'Updated',
+        profile: 'Profile',
+        project: 'Project',
+        status: 'Status'
+      },
+      orderings: {
+        updated: 'Updated',
+        created: 'Created',
+        status: 'Status',
+        tokens: 'Tokens',
+        cost: 'Cost',
+        manual: 'Manual'
+      },
+      rowMeta: {
+        updated: 'Updated',
+        preview: 'Preview',
+        tokens: 'Tokens',
+        cost: 'Cost',
+        pr: 'PR',
+        profile: 'Profile'
+      },
+      pr: {
+        open: 'Open',
+        draft: 'Draft',
+        merged: 'Merged',
+        closed: 'Closed',
+        none: 'No PR'
+      },
+      statuses: {
+        'needs-input': 'Needs input',
+        working: 'Working',
+        unread: 'Unread',
+        draft: 'Draft',
+        idle: 'Idle'
+      },
+      inboxStyle: 'Inbox style',
+      archived: 'Archived',
+      expandAll: 'Expand all',
+      collapseAll: 'Collapse all',
+      resetToDefaults: 'Reset to defaults'
+    }
   },
 
   composer: {

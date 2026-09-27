@@ -237,12 +237,14 @@ def _cached_tools(raws: Iterable[Any]) -> List[SimpleNamespace]:
 
 @dataclass
 class _Candidate:
-    """One registration attempt (native tool or generated utility); ``origin`` is the provenance text in diagnostics."""
+    """One registration attempt (native tool or generated utility); ``origin`` is the provenance text in
+    diagnostics, ``source_name`` the server's original tool name (the collision-disambiguation hash input)."""
 
     registry_name: str
     origin: str
     schema: dict
     handler: Callable
+    source_name: str = ""
 
     @property
     def is_utility(self) -> bool:
@@ -261,7 +263,7 @@ def _tool_candidates(name: str, tools: Iterable[Any], should_register: Callable[
         _schema._scan_mcp_description(name, t.name, t.description or "")
         schema = _schema._convert_mcp_schema(name, t)
         handler = _handlers._make_tool_handler(name, t.name, tool_timeout)
-        out.append(_Candidate(schema["name"], f"tool {t.name!r}", schema, handler))
+        out.append(_Candidate(schema["name"], f"tool {t.name!r}", schema, handler, t.name))
     return out
 
 
@@ -272,14 +274,48 @@ def _utility_candidates(name: str, entries: Iterable[Any], tool_timeout) -> List
         schema, key = (raw.get("schema"), raw.get("handler_key")) if isinstance(raw, dict) else (None, None)
         if isinstance(schema, dict) and key in _UTILITY_HANDLER_FACTORIES and schema.get("name"):
             out.append(_Candidate(schema["name"], f"{_UTILITY_ORIGIN_PREFIX}{key!r}", schema,
-                                  _UTILITY_HANDLER_FACTORIES[key](name, tool_timeout)))
+                                  _UTILITY_HANDLER_FACTORIES[key](name, tool_timeout), key))
     return out
 
 
+def _disambiguate_native_collisions(name: str, candidates: List[_Candidate]) -> List[_Candidate]:
+    """Distinct server tools whose names normalize onto ONE registry name are distinct capabilities:
+    give the lossy ones deterministic distinct names instead of skipping the whole set. The entry whose
+    name needed no rewriting keeps the natural name (stable across ``list_changed`` refreshes; that is
+    also the only name a server could already have registered), every other colliding entry gets a
+    ``_<sha1(original tool name)[:6]>`` suffix. Servers with no such collision are untouched — their
+    names stay byte-identical. Utilities are excluded (native/utility shadowing is resolved separately).
+    Mutates *candidates* in place and returns it."""
+    by_registry_name: Dict[str, List[_Candidate]] = {}
+    for c in candidates:
+        if not c.is_utility:
+            by_registry_name.setdefault(c.registry_name, []).append(c)
+    for registry_name, group in by_registry_name.items():
+        if len({c.source_name or c.origin for c in group}) < 2:
+            continue  # one tool listed twice: the duplicate drop in the caller handles that
+        # The bare name belongs to the member whose OWN tool name needed no rewriting (``read_file``,
+        # never ``read-file``): that is the name a previous pass would have registered it under, so
+        # keeping it makes a ``list_changed`` refresh rename-free. At most one member can qualify.
+        kept = next((c for c in group
+                     if c.source_name and _schema.sanitize_mcp_name_component(c.source_name) == c.source_name), None)
+        for c in group:
+            if c is kept:
+                continue
+            c.registry_name = _schema.mcp_disambiguated_tool_name(registry_name, c.source_name or c.origin)
+        logger.info(
+            "MCP server '%s': %d distinct tools normalize onto '%s' — %s; giving each of the others a "
+            "deterministic hash suffix instead of skipping the colliding entries",
+            name, len(group), registry_name,
+            f"the natural name stays with tool {kept.source_name!r}" if kept
+            else "no name is exact, so every one of them needs a suffix")
+    return candidates
+
+
 def _resolve_name_collisions(name: str, candidates: List[_Candidate]) -> List[_Candidate]:
-    """Preflight name collisions: exact duplicates dropped silently; a utility normalizing onto
-    a native tool's name is shadowed (native wins); any other multi-origin collision skips every
-    colliding entry (fail closed). Returns survivors in order."""
+    """Preflight name collisions: distinct native tools normalizing onto one name are disambiguated
+    (never dropped — see ``_disambiguate_native_collisions``); exact duplicates dropped silently; a
+    utility normalizing onto a native tool's name is shadowed (native wins); any other multi-origin
+    collision skips every colliding entry (fail closed). Returns survivors in order."""
     unique: List[_Candidate] = []
     origins_by_name: Dict[str, set[str]] = {}
     for c in candidates:
@@ -290,6 +326,12 @@ def _resolve_name_collisions(name: str, candidates: List[_Candidate]) -> List[_C
             continue
         origins.add(c.origin)
         unique.append(c)
+    # Lossy normalization is only a naming problem, not an ambiguity: rename the colliding natives so
+    # they all register, then re-index before the shadowing/fail-closed pass below.
+    unique = _disambiguate_native_collisions(name, unique)
+    origins_by_name = {}
+    for c in unique:
+        origins_by_name.setdefault(c.registry_name, set()).add(c.origin)
     ambiguous: Dict[str, List[str]] = {}
     shadowed: set[tuple[str, str]] = set()
     # A generated resource/prompt utility that normalizes onto a server-native tool's name must not knock
@@ -395,7 +437,8 @@ def _write_schema_cache(name: str, server: "MCPServerTask", config: dict, should
 def _register_server_tools(name: str, server: "MCPServerTask", config: dict) -> List[str]:
     """Register a connected server's tools plus utilities (initial discovery and list_changed
     refresh); returns the names. Toolset aliases derive from the live registry, not
-    ``toolsets.TOOLSETS``; lossy normalization collisions (``read-file``/``read_file``) fail closed."""
+    ``toolsets.TOOLSETS``; lossy normalization collisions (``read-file``/``read_file``, or every tool
+    of a non-ASCII-named server) are disambiguated with a stable hash suffix, not dropped."""
     should_register = _make_tool_filter(name, config)
     key = _server_key_for_task(server)
     _record_tool_trust_metadata(name, config, server._tools, key)
@@ -591,8 +634,11 @@ def _register_from_cache_sync(name: str, config: dict, entry: dict) -> List[str]
     _record_tool_trust_metadata(name, config, cached_tools)
     candidates = _tool_candidates(name, cached_tools, _make_tool_filter(name, config), tool_timeout)
     candidates += _utility_candidates(name, utility_tools_from_cache_entry(entry), tool_timeout)
+    # Same deterministic disambiguation as the live path, so a server registered from cache never
+    # presents different names than the same server registered live (the cache stores original names).
     registered = _register_candidates(
-        name, candidates, check_fn=_make_check_fn(name), scope=_core._mcp_registry_scope, lazy=True)
+        name, _disambiguate_native_collisions(name, candidates),
+        check_fn=_make_check_fn(name), scope=_core._mcp_registry_scope, lazy=True)
     if registered:
         with _core._lock:
             key = _server_key(name)

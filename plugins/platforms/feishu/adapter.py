@@ -163,6 +163,8 @@ _FEISHU_WEBHOOK_BODY_TIMEOUT_SECONDS = 30          # max seconds to read request
 _FEISHU_WEBHOOK_ANOMALY_THRESHOLD = 25             # consecutive error responses before WARNING log
 _FEISHU_WEBHOOK_ANOMALY_TTL_SECONDS = 6 * 60 * 60  # anomaly tracker TTL (6 hours) — matches openclaw
 _FEISHU_CARD_ACTION_DEDUP_TTL_SECONDS = 15 * 60    # card action token dedup window (15 min)
+_CARD_REPLY_TRACK_TTL_SECONDS = 30 * 60            # card reply message-id tracking window (30 min)
+_CARD_REPLY_TRACK_MAX = 512                        # bound on tracked card reply message ids
 
 _APPROVAL_CHOICE_MAP: Dict[str, str] = {
     "approve_once": "once", "approve_session": "session", "approve_always": "always", "deny": "deny",
@@ -1270,6 +1272,31 @@ def _card(title: str, template: str, markdown: str, *, actions: Optional[List[Di
     }
 
 
+_REPLY_CARD_TITLE = "Hermes"          # card header title (brand line)
+_REPLY_CARD_TEMPLATE = "orange"       # Claude-style warm accent (Feishu preset palette)
+
+
+def _reply_card(markdown: str, *, footer: str = "") -> Dict[str, Any]:
+    """Wide interactive card for a normal assistant reply: warm accent header, markdown body, note footer.
+
+    Interactive cards render the full markdown set in Feishu (headings, tables, code fences, lists)
+    and read as a proper bot reply, where ``post`` md elements only cover a subset. Local Hermes
+    customization (D:/hermes工作区/scripts/patches/feishu_card_replies.patch).
+    """
+    elements: List[Dict[str, Any]] = [{"tag": "markdown", "content": markdown}]
+    if footer:
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": footer}]})
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": _REPLY_CARD_TITLE},
+            "template": _REPLY_CARD_TEMPLATE,
+        },
+        "elements": elements,
+    }
+
+
 def _sdk_build(request_cls: Any, **fields: Any) -> Any:
     """``request_cls.builder().<field>(value)...build()``; SimpleNamespace when the SDK is unbound."""
     if request_cls is None:
@@ -1319,6 +1346,8 @@ class FeishuAdapter(BasePlatformAdapter):
         self._webhook_rate_counts: Dict[str, tuple[int, float]] = {}  # rate_key → (count, window_start)
         self._webhook_anomaly_counts: Dict[str, tuple[int, str, float]] = {}  # ip → (count, last_status, first_seen)
         self._card_action_tokens: Dict[str, float] = {}  # token → first_seen_time
+        # Replies sent as interactive cards: message_id → sent_at (bounded, pruned lazily).
+        self._card_reply_ids: "OrderedDict[str, float]" = OrderedDict()
         # Inbound events that arrived before the loop was ready; one drainer thread replays them.
         self._pending_inbound_events: List[Any] = []
         self._pending_inbound_lock = threading.Lock()
@@ -1675,6 +1704,12 @@ class FeishuAdapter(BasePlatformAdapter):
 
         try:
             for chunk in chunks:
+                card_response = await self._send_reply_card(
+                    chat_id=chat_id, chunk=chunk, reply_to=reply_to, metadata=metadata,
+                )
+                if card_response is not None:
+                    last_response = card_response
+                    continue
                 msg_type, payload = self._build_outbound_payload(chunk, prefer_post=prefer_post)
                 try:
                     response = await self._feishu_send_with_retry(
@@ -1699,6 +1734,44 @@ class FeishuAdapter(BasePlatformAdapter):
             logger.error("[Feishu] Send error: %s", exc, exc_info=True)
             return SendResult(success=False, error=str(exc))
 
+    async def _send_reply_card(
+        self, *, chat_id: str, chunk: str, reply_to: Optional[str], metadata: Optional[Dict[str, Any]],
+    ) -> Any:
+        """Send one reply chunk as an interactive card; None when the card leg fails (caller falls back)."""
+        try:
+            response = await self._feishu_send_with_retry(
+                chat_id=chat_id,
+                msg_type="interactive",
+                payload=json.dumps(
+                    _reply_card(chunk, footer=time.strftime("%Y-%m-%d %H:%M")), ensure_ascii=False,
+                ),
+                reply_to=reply_to,
+                metadata=metadata,
+            )
+        except Exception as exc:
+            logger.warning("[Feishu] Card reply rejected by API (%s); falling back to post/text", exc)
+            return None
+        if not self._response_succeeded(response):
+            logger.warning(
+                "[Feishu] Card reply failed (%s); falling back to post/text",
+                getattr(response, "msg", "") or getattr(response, "code", "") or "unknown",
+            )
+            return None
+        self._remember_card_reply(self._extract_response_field(response, "message_id"))
+        return response
+
+    def _remember_card_reply(self, message_id: Any) -> None:
+        """Track card-reply message ids (bounded, lazily pruned) so edit_message updates them as cards."""
+        if not message_id:
+            return
+        now = time.time()
+        self._card_reply_ids[str(message_id)] = now
+        expired = [k for k, ts in self._card_reply_ids.items() if now - ts > _CARD_REPLY_TRACK_TTL_SECONDS]
+        for k in expired:
+            del self._card_reply_ids[k]
+        while len(self._card_reply_ids) > _CARD_REPLY_TRACK_MAX:
+            self._card_reply_ids.popitem(last=False)
+
     async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False) -> SendResult:
         """Edit a previously sent Feishu text/post message."""
         if not self._client:
@@ -1713,13 +1786,21 @@ class FeishuAdapter(BasePlatformAdapter):
             return self._finalize_send_result(response, "update failed")
 
         try:
-            msg_type, payload = self._build_outbound_payload(content)
-            result = await _update(msg_type, payload)
-            if not result.success and msg_type == "post" and _POST_CONTENT_INVALID_RE.search(result.error or ""):
-                logger.warning("[Feishu] Invalid post update payload rejected by API; falling back to plain text")
+            if message_id in self._card_reply_ids:
+                # Updating a message we sent as an interactive card: keep it a card (a post/text
+                # update would replace the card with a plain bubble).
                 result = await _update(
-                    "text", json.dumps({"text": _strip_markdown_to_plain_text(content)}, ensure_ascii=False),
+                    "interactive",
+                    json.dumps(_reply_card(content, footer=time.strftime("%Y-%m-%d %H:%M")), ensure_ascii=False),
                 )
+            else:
+                msg_type, payload = self._build_outbound_payload(content)
+                result = await _update(msg_type, payload)
+                if not result.success and msg_type == "post" and _POST_CONTENT_INVALID_RE.search(result.error or ""):
+                    logger.warning("[Feishu] Invalid post update payload rejected by API; falling back to plain text")
+                    result = await _update(
+                        "text", json.dumps({"text": _strip_markdown_to_plain_text(content)}, ensure_ascii=False),
+                    )
             if result.success:
                 result.message_id = message_id
             return result

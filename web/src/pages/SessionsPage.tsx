@@ -877,6 +877,7 @@ export default function SessionsPage() {
   const { setAfterTitle, setEnd } = usePageHeader();
   const { activeAction, actionStatus, dismissLog } = useSystemActions();
   const resumeInChatEnabled = isDashboardEmbeddedChatEnabled();
+  const navigate = useNavigate();
   const selectedSources = sourceSelectionsByCategory[sessionCategory];
 
   const pinnedSourceSelections = useMemo(
@@ -1202,6 +1203,16 @@ export default function SessionsPage() {
       clearSelection();
     },
     [clearSelection],
+  );
+
+  // The Overview card is the dashboard's landing surface, so its rows have to
+  // be enterable: tapping one resumes that session in the Chat tab — the same
+  // target as the History row's ▶ (Resume in Chat) button.
+  const openSessionInChat = useCallback(
+    (id: string) => {
+      navigate(`/chat?resume=${encodeURIComponent(id)}`);
+    },
+    [navigate],
   );
 
   const updateSessionCategory = useCallback(
@@ -2148,7 +2159,17 @@ export default function SessionsPage() {
                 {recentSessions.map((s) => (
                   <div
                     key={s.id}
-                    className="flex min-w-0 max-w-full flex-col gap-2 border border-border p-3 sm:flex-row sm:items-center sm:justify-between"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={t.sessions.resumeInChat}
+                    onClick={() => openSessionInChat(s.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openSessionInChat(s.id);
+                      }
+                    }}
+                    className="flex min-w-0 max-w-full cursor-pointer flex-col gap-2 border border-border p-3 transition-colors hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div className="flex min-w-0 flex-1 flex-col gap-1">
                       <span
@@ -2180,13 +2201,16 @@ export default function SessionsPage() {
                       )}
                     </div>
 
-                    <Badge
-                      tone="outline"
-                      className="shrink-0 self-start text-xs sm:self-center"
-                    >
-                      <Database className="mr-1 h-3 w-3" />
-                      {s.source ? sourceLabel(s.source) : "local"}
-                    </Badge>
+                    <div className="flex shrink-0 items-center gap-2 self-start sm:self-center">
+                      <Badge tone="outline" className="shrink-0 text-xs">
+                        <Database className="mr-1 h-3 w-3" />
+                        {s.source ? sourceLabel(s.source) : "local"}
+                      </Badge>
+                      <Play
+                        className="h-3.5 w-3.5 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                    </div>
                   </div>
                 ))}
               </CardContent>

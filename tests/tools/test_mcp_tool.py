@@ -5,6 +5,7 @@ All tests use mocks -- no real MCP servers or subprocesses are started.
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import threading
@@ -1001,8 +1002,11 @@ class TestDiscoverAndRegister:
         _servers.pop("fs", None)
 
 
-    def test_same_server_normalization_collision_skips_all_ambiguous_tools(self):
+    def test_same_server_normalization_collision_disambiguates_both_tools(self, caplog):
+        """Distinct tools whose names normalize onto ONE registry name (``read-file``/``read_file``)
+        are both registered: the lossless name keeps it and the lossy sibling gets a hash suffix."""
         from tools.mcp_tool_registration import _register_server_tools
+        from tools.mcp_tool_schema import mcp_disambiguated_tool_name
         from tools.registry import ToolRegistry
 
         registry = ToolRegistry()
@@ -1018,12 +1022,57 @@ class TestDiscoverAndRegister:
         config = {"tools": {"resources": False, "prompts": False}}
 
         with patch("tools.registry.registry", registry), \
-             patch("tools.mcp_tool_registration._track_mcp_tool_server"):
+             patch("tools.mcp_tool_registration._track_mcp_tool_server"), \
+             patch("tools.mcp_tool_registration._write_schema_cache"), \
+             caplog.at_level(logging.INFO, logger="tools.mcp_tool"):
             registered = _register_server_tools("srv", server, config)
 
-        assert registered == ["mcp__srv__safe_tool"]
-        assert registry.get_entry("mcp__srv__read_file") is None
+        suffixed = mcp_disambiguated_tool_name("mcp__srv__read_file", "read-file")
+        assert sorted(registered) == sorted([suffixed, "mcp__srv__read_file", "mcp__srv__safe_tool"])
+        assert registry.get_entry("mcp__srv__read_file") is not None
+        assert registry.get_entry(suffixed) is not None
         assert registry.get_entry("mcp__srv__safe_tool") is not None
+        assert not any("name normalization collision" in record.message for record in caplog.records)
+
+    def test_non_ascii_tool_names_all_register_with_stable_suffixes(self, caplog):
+        """Non-ASCII MCP tool names (e.g. 华泰柏瑞) must all register with stable hash suffixes."""
+        from tools.mcp_tool import _servers
+        from tools.mcp_tool_registration import _register_server_tools
+        from tools.mcp_tool_schema import mcp_prefixed_tool_name
+        from tools.registry import ToolRegistry
+
+        tools = ["内部研报__内部研报对话接口", "内部研报__返回内部研报原文",
+                 "外部研报__外部研报对话接口", "外部研报__返回内部研报原文"]
+        config = {"tools": {"resources": False, "prompts": False}}
+        session = MagicMock()
+        session.call_tool = AsyncMock(return_value=_make_call_result("ok"))
+        server = _make_mock_server("华泰柏瑞MCP", session=session,
+                                   tools=[_make_mcp_tool(t) for t in tools])
+        _servers["华泰柏瑞MCP"] = server
+        try:
+            with patch("tools.registry.registry", ToolRegistry()) as registry, \
+                 patch("tools.mcp_tool_registration._track_mcp_tool_server"), \
+                 patch("tools.mcp_tool_registration._write_schema_cache"), \
+                 caplog.at_level(logging.INFO, logger="tools.mcp_tool"):
+                registered = _register_server_tools("华泰柏瑞MCP", server, config)
+
+                natural = mcp_prefixed_tool_name("华泰柏瑞MCP", tools[0])
+                assert registered and all(n.startswith(natural + "_") for n in registered)
+                assert len(registered) == len(set(registered)) == len(tools)
+                with patch("tools.registry.registry", ToolRegistry()):
+                    assert sorted(_register_server_tools("华泰柏瑞MCP", server, config)) == sorted(registered)
+
+            def _run_coro(coro_or_factory, timeout=30):
+                return asyncio.run(coro_or_factory() if callable(coro_or_factory) else coro_or_factory)
+
+            with patch("tools.mcp_tool_loop._run_on_mcp_loop", side_effect=_run_coro):
+                for name in registered:
+                    entry = registry.get_entry(name)
+                    assert entry is not None
+                    entry.handler({"arg": name})
+            assert [call.args[0] for call in session.call_tool.await_args_list] == tools
+        finally:
+            _servers.pop("华泰柏瑞MCP", None)
 
     def test_native_tool_wins_over_generated_utility_on_collision(self):
         """A server-native tool named `read_resource` must survive its collision

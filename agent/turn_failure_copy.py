@@ -93,6 +93,9 @@ class ExitFailure(NamedTuple):
 _EXIT_REASON_FAILURES: Tuple[Tuple[str, str, bool, bool], ...] = (
     # Advisory: the reasoning-only text may literally be the answer, and cron stays silent.
     ("empty_response_exhausted", "empty_response", True, False),
+    # Degenerate residue (1-token / a few chars of reasoning, no content) is NOT an answer.
+    # Local patch 2026-09-24: fail the turn so cron records error instead of a silent success.
+    ("degenerate_empty_response", "empty_response", True, True),
     ("all_retries_exhausted_no_response", FailoverReason.server_error.value, True, True),
     # #55316/#54756: the loop stopped on a tool tail with no follow-up text; the
     # finalizer synthesizes the visible close and fails the turn.
